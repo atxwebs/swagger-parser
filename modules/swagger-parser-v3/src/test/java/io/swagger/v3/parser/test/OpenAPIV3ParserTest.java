@@ -1,6 +1,22 @@
 package io.swagger.v3.parser.test;
 
 
+import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.get;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
+import static java.util.Arrays.asList;
+import static java.util.Collections.emptyList;
+import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.CoreMatchers.instanceOf;
+import static org.hamcrest.CoreMatchers.notNullValue;
+import static org.junit.Assert.assertThat;
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.fail;
+
 import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -14,11 +30,20 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 
+import org.apache.commons.io.FileUtils;
+import org.hamcrest.CoreMatchers;
+import org.testng.Assert;
+import org.testng.annotations.AfterClass;
+import org.testng.annotations.BeforeClass;
+import org.testng.annotations.Test;
+import org.testng.reporters.Files;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+
 import io.swagger.v3.core.util.Json;
 import io.swagger.v3.core.util.Yaml;
 import io.swagger.v3.oas.models.Components;
@@ -52,37 +77,42 @@ import io.swagger.v3.parser.core.models.AuthorizationValue;
 import io.swagger.v3.parser.core.models.ParseOptions;
 import io.swagger.v3.parser.core.models.SwaggerParseResult;
 import mockit.Injectable;
-import org.apache.commons.io.FileUtils;
-import org.apache.commons.lang3.StringUtils;
-import org.hamcrest.CoreMatchers;
-import org.testng.Assert;
-import org.testng.annotations.AfterClass;
-import org.testng.annotations.BeforeClass;
-import org.testng.annotations.Test;
-import org.testng.reporters.Files;
-
-import static java.util.Arrays.asList;
-import static java.util.Collections.emptyList;
-
-import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
-import static com.github.tomakehurst.wiremock.client.WireMock.get;
-import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.hamcrest.CoreMatchers.instanceOf;
-import static org.hamcrest.CoreMatchers.notNullValue;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertThat;
-import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertFalse;
-import static org.testng.Assert.assertNotNull;
-import static org.testng.Assert.assertNull;
-import static org.testng.Assert.assertTrue;
-import static org.testng.Assert.fail;
 
 
 public class OpenAPIV3ParserTest {
     protected int serverPort = getDynamicPort();
     protected WireMockServer wireMockServer;
+
+    @Test
+    public void testAnonymousModelAllOf() {
+        ParseOptions options = new ParseOptions();
+        options.setResolveFully(true);
+        SwaggerParseResult result = new OpenAPIV3Parser().readLocation("issue203/issue203AllOf.yaml", null, options);
+        OpenAPI openAPI = result.getOpenAPI();
+        assertEquals(openAPI.getComponents().getSchemas().get("Supplier").getXml().getName(),"supplierObject");
+    }
+
+    @Test
+    public void testIssue1518() {
+        ParseOptions options = new ParseOptions();
+        options.setResolve(true);
+        SwaggerParseResult result = new OpenAPIV3Parser().readLocation("issue-1518/api.json", null, options);
+        OpenAPI openAPI = result.getOpenAPI();
+        assertTrue(((Schema)openAPI.getComponents().getSchemas().get("Analemmata").getProperties().get("tashotSipe")).get$ref().equals("#/components/schemas/TashotSipe"));
+        assertTrue(openAPI.getComponents().getSchemas().get("analemmata") == null);
+    }
+
+    @Test
+    public void testIssue1518StackOverFlow() {
+        ParseOptions options = new ParseOptions();
+        options.setResolve(true);
+        try {
+            SwaggerParseResult result = new OpenAPIV3Parser().readLocation("example0/api.json", null, options);
+            Yaml.prettyPrint(result.getOpenAPI().getComponents().getSchemas());
+        }catch (StackOverflowError stackOverflowError){
+            assertTrue(false);
+        }
+    }
 
     @Test
     public void testIssue251() throws IOException {
@@ -202,6 +232,65 @@ public class OpenAPIV3ParserTest {
     }
 
     @Test
+    public void testExampleFlag() {
+        OpenAPIV3Parser openApiParser = new OpenAPIV3Parser();
+        ParseOptions options = new ParseOptions();
+        options.setResolve(true);
+        options.setResolveCombinators(true);
+        options.setResolveFully(true);
+        options.setFlatten(true);
+        SwaggerParseResult parseResult = openApiParser.readLocation("media-type-null-example.yaml", null, options);
+
+        OpenAPI openAPI = parseResult.getOpenAPI();
+
+        assertNull(openAPI.getPaths().get("/pets/{petId}").getGet().getResponses().get("200").getContent().get("application/json").getExample());
+        assertTrue(openAPI.getPaths().get("/pets/{petId}").getGet().getResponses().get("200").getContent().get("application/json").getExampleSetFlag());
+
+        assertNull(openAPI.getPaths().get("/pet").getPost().getResponses().get("200").getContent().get("application/json").getExample());
+        assertFalse(openAPI.getPaths().get("/pet").getPost().getResponses().get("200").getContent().get("application/json").getExampleSetFlag());
+
+        assertNotNull(openAPI.getPaths().get("/pet").getPost().getRequestBody().getContent().get("application/json").getExample());
+        assertNotNull(openAPI.getPaths().get("/pet").getPost().getRequestBody().getContent().get("application/json").getExample());
+
+        assertTrue(openAPI.getPaths().get("/pet").getPost().getRequestBody().getContent().get("application/json").getExampleSetFlag());
+
+        assertNotNull(openAPI.getPaths().get("/object-with-null-example").getGet().getResponses().get("200").getContent().get("application/json").getExamples().get("foo").getValue());
+        assertTrue(openAPI.getPaths().get("/object-with-null-example").getGet().getResponses().get("200").getContent().get("application/json").getExamples().get("foo").getValueSetFlag());
+        assertNull(openAPI.getPaths().get("/object-with-null-example").getGet().getResponses().get("200").getContent().get("application/json").getExamples().get("bar").getValue());
+        assertTrue(openAPI.getPaths().get("/object-with-null-example").getGet().getResponses().get("200").getContent().get("application/json").getExamples().get("bar").getValueSetFlag());
+
+        assertNotNull(openAPI.getPaths().get("/object-with-null-in-schema-example").getGet().getResponses().get("200").getContent().get("application/json").getExamples().get("a").getValue());
+        assertTrue(openAPI.getPaths().get("/object-with-null-in-schema-example").getGet().getResponses().get("200").getContent().get("application/json").getExamples().get("a").getValueSetFlag());
+        assertNotNull(openAPI.getPaths().get("/object-with-null-in-schema-example").getGet().getResponses().get("200").getContent().get("application/json").getExamples().get("b").getValue());
+        assertTrue(openAPI.getPaths().get("/object-with-null-in-schema-example").getGet().getResponses().get("200").getContent().get("application/json").getExamples().get("b").getValueSetFlag());
+        assertNotNull(openAPI.getPaths().get("/object-with-null-in-schema-example").getGet().getResponses().get("200").getContent().get("application/json").getExamples().get("c").getValue());
+        assertTrue(openAPI.getPaths().get("/object-with-null-in-schema-example").getGet().getResponses().get("200").getContent().get("application/json").getExamples().get("c").getValueSetFlag());
+        assertNull(openAPI.getPaths().get("/object-with-null-in-schema-example").getGet().getResponses().get("200").getContent().get("application/json").getExamples().get("d").getValue());
+        assertTrue(openAPI.getPaths().get("/object-with-null-in-schema-example").getGet().getResponses().get("200").getContent().get("application/json").getExamples().get("d").getValueSetFlag());
+
+
+        assertNull(openAPI.getComponents().getSchemas().get("ObjectWithNullExample").getExample());
+        assertTrue(openAPI.getComponents().getSchemas().get("ObjectWithNullExample").getExampleSetFlag());
+
+        assertNotNull(openAPI.getComponents().getSchemas().get("ObjectWithNullInSchemaExample").getExample());
+        assertTrue(openAPI.getComponents().getSchemas().get("ObjectWithNullInSchemaExample").getExampleSetFlag());
+
+        assertNotNull(((Schema)openAPI.getComponents().getSchemas().get("ObjectWithNullPropertyExample").getProperties().get("a")).getExample());
+        assertTrue(((Schema)openAPI.getComponents().getSchemas().get("ObjectWithNullPropertyExample").getProperties().get("a")).getExampleSetFlag());
+        assertNull(((Schema)openAPI.getComponents().getSchemas().get("ObjectWithNullPropertyExample").getProperties().get("b")).getExample());
+        assertTrue(((Schema)openAPI.getComponents().getSchemas().get("ObjectWithNullPropertyExample").getProperties().get("b")).getExampleSetFlag());
+
+        assertNull(openAPI.getComponents().getSchemas().get("StringWithNullExample").getExample());
+        assertTrue(openAPI.getComponents().getSchemas().get("StringWithNullExample").getExampleSetFlag());
+
+        assertNull(openAPI.getComponents().getSchemas().get("ArrayWithNullArrayExample").getExample());
+        assertTrue(openAPI.getComponents().getSchemas().get("ArrayWithNullArrayExample").getExampleSetFlag());
+
+        assertNull(((ArraySchema)openAPI.getComponents().getSchemas().get("ArrayWithNullItemExample")).getItems().getExample());
+        assertTrue(((ArraySchema)openAPI.getComponents().getSchemas().get("ArrayWithNullItemExample")).getItems().getExampleSetFlag());
+    }
+
+    @Test
     public void testIssueFlattenAdditionalPropertiesSchemaInlineModelTrue() {
         OpenAPIV3Parser openApiParser = new OpenAPIV3Parser();
         ParseOptions options = new ParseOptions();
@@ -272,8 +361,8 @@ public class OpenAPIV3ParserTest {
         assertEquals(((ComposedSchema)openAPI.getComponents().getSchemas().get("Pagelimit")).getOneOf().get(0).get$ref(),"#/components/schemas/Macaw2");
 
         //requestBodies
-        assertNotNull(openAPI.getComponents().getSchemas().get("Body"));
-        assertEquals(((ComposedSchema)openAPI.getComponents().getSchemas().get("Body")).getAllOf().get(1).get$ref(),"#/components/schemas/requestBodiesAllOf2");
+        assertNotNull(openAPI.getComponents().getSchemas().get("RequestBodiesBody"));
+        assertEquals(((ComposedSchema)openAPI.getComponents().getSchemas().get("RequestBodiesBody")).getAllOf().get(1).get$ref(),"#/components/schemas/requestBodiesAllOf2");
         assertNotNull(openAPI.getComponents().getSchemas().get("InlineResponseItems200"));
         assertEquals(((ComposedSchema)openAPI.getComponents().getSchemas().get("InlineBodyItemsApplicationxmlrequestBodies")).getAllOf().get(1).get$ref(),"#/components/schemas/ApplicationxmlAllOf2");
 
@@ -416,9 +505,9 @@ public class OpenAPIV3ParserTest {
 
         OpenAPI openAPI = parseResult.getOpenAPI();
         assertNotNull(openAPI.getComponents().getSchemas().get("status"));
-        assertNotNull(openAPI.getComponents().getSchemas().get("body"));
+        assertNotNull(openAPI.getComponents().getSchemas().get("test_body"));
         assertNotNull(openAPI.getComponents().getSchemas().get("inline_response_200"));
-        assertNotNull(openAPI.getComponents().getSchemas().get("body_1"));
+        assertNotNull(openAPI.getComponents().getSchemas().get("test_body_1"));
         assertNotNull(openAPI.getComponents().getSchemas().get("Test1"));
         assertNotNull(openAPI.getComponents().getSchemas().get("Test2"));
     }
